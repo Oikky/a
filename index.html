@@ -54,6 +54,11 @@
   .info .grow { flex: 1; }
   .info button { padding: 8px 12px; font-size: 13px; }
 
+  /* Botões com a cor do centro da face que eles giram */
+  button.tinted { background: var(--bg); color: var(--fg); border-color: rgba(255,255,255,.12); text-shadow: none; }
+  button.tinted:hover { background: var(--bg); filter: brightness(1.12); }
+  button.tinted:active { background: var(--bg); filter: brightness(.85); }
+
   .speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #888; }
   .speed button { flex: 1; padding: 8px 0; font-size: 13px; font-weight: 500; }
   .speed button.on { background: #2a2a2a; border-color: #555; color: #fff; }
@@ -324,6 +329,20 @@
     else enqueue(b.dataset.m);
   });
 
+  // Pinta cada botão de face (R, L, U, D, F, B) com a cor do centro que está nessa face agora
+  const LIGHT = new Set(['U', 'D']); // branco e amarelo pedem texto escuro
+  function tintButtons() {
+    const center = {};
+    for (const s of stickers) if (s.p.filter(v => v !== 0).length === 1) center[faceOfNormal(s.n)] = s.c;
+    document.querySelectorAll('button[data-m]').forEach(b => {
+      const c = center[b.dataset.m[0]];
+      if (!c) return;
+      b.classList.add('tinted');
+      b.style.setProperty('--bg', COLORS[c]);
+      b.style.setProperty('--fg', LIGHT.has(c) ? '#111' : '#fff');
+    });
+  }
+
   function render() {
     const faces = { U: [], D: [], F: [], B: [], R: [], L: [] };
     const sel = selectedSet();
@@ -345,6 +364,7 @@
       faces[f].push(s.c);
     }
     renderInfo(sel);
+    tintButtons();
     const solved = Object.values(faces).every(arr => arr.every(c => c === arr[0]));
     solvedEl.textContent = solved && history.length ? '✔ Resolvido!' : '';
     historyEl.textContent = history.length ? history.slice(-30).join(' ') : scrambleText;
@@ -483,6 +503,7 @@
   for (const m of BUTTONS) {
     const b = document.createElement('button');
     b.textContent = m;
+    b.dataset.m = m;
     b.addEventListener('click', () => enqueue(m));
     movesEl.appendChild(b);
   }
