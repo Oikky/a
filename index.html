@@ -40,6 +40,20 @@
   .movelabel b { display: block; font-size: 30px; line-height: 1; color: #fff; font-family: ui-monospace, Menlo, Consolas, monospace; }
   .movelabel span { font-size: 12px; color: #999; }
 
+  /* Seleção de peças */
+  .st > i, .face > i { transition: filter .2s, transform .2s; }
+  .st.dim > i, .face > i.dim { filter: brightness(.28) saturate(.5); }
+  .st.hl > i { box-shadow: inset 0 0 0 2px #000, inset 0 0 0 4px #fff; }
+  .face > i.hl { box-shadow: 0 0 0 2px #fff; transform: scale(1.06); position: relative; z-index: 1; }
+  .face > i, .st { cursor: pointer; }
+  .info { width: 100%; max-width: 1100px; margin-top: 12px; min-height: 52px; background: #0b0b0b; border: 1px solid #1c1c1c; border-radius: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; color: #bbb; }
+  .info .muted { color: #666; font-size: 13px; }
+  .info b { color: #fff; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: #161616; border: 1px solid #262626; border-radius: 999px; padding: 4px 10px 4px 5px; }
+  .sw { width: 18px; height: 18px; border-radius: 5px; display: inline-block; }
+  .info .grow { flex: 1; }
+  .info button { padding: 8px 12px; font-size: 13px; }
+
   .speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #888; }
   .speed button { flex: 1; padding: 8px 0; font-size: 13px; font-weight: 500; }
   .speed button.on { background: #2a2a2a; border-color: #555; color: #fff; }
@@ -74,6 +88,8 @@
     <div id="net"></div>
   </div>
 </div>
+
+<div class="info" id="info"></div>
 
 <div class="controls">
   <div class="moves" id="moves"></div>
@@ -180,6 +196,7 @@
       const inner = document.createElement('i');
       el.appendChild(inner);
       cubeEl.appendChild(el);
+      el.dataset.key = key(s.p, s.n);
       slots.set(key(s.p, s.n), { el, inner, p: s.p.slice(), n: s.n.slice(), base: '' });
     }
   }
@@ -243,22 +260,91 @@
     }
   }
 
+  netEl.addEventListener('click', e => {
+    const cell = e.target.closest('.face > i');
+    if (cell) pick(cell.dataset.key);
+  });
+
   // ---------- Desenho ----------
   const solvedEl = document.getElementById('solved');
   const historyEl = document.getElementById('history');
   let history = [];
   let scrambleText = '';
 
+  // ---------- Seleção ----------
+  // selection = { type: 'piece' | 'center', s: adesivo tocado } — acompanha a peça quando ela se move
+  let selection = null;
+  const COLOR_PT = { U: 'Branco', D: 'Amarelo', F: 'Verde', B: 'Azul', R: 'Vermelho', L: 'Laranja' };
+  const sameP = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  const stickerAt = new Map(); // "p|n" -> adesivo atual naquele lugar
+
+  function selectedSet() {
+    if (!selection) return null;
+    const t = selection.s;
+    if (selection.type === 'piece') return new Set(stickers.filter(x => sameP(x.p, t.p)));
+    const a = t.n.findIndex(v => v !== 0);
+    return new Set(stickers.filter(x => x.p[a] === t.n[a]));
+  }
+
+  function pick(k) {
+    const t = stickerAt.get(k);
+    if (!t) return;
+    const isCenter = t.p.filter(v => v !== 0).length === 1;
+    if (selection && selection.s === t) selection = null; // tocar de novo desmarca
+    else selection = { type: isCenter ? 'center' : 'piece', s: t };
+    render();
+  }
+
+  const infoEl = document.getElementById('info');
+  const swatch = c => `<span class="chip"><span class="sw" style="background:${COLORS[c]}"></span>${COLOR_PT[c]}</span>`;
+  function renderInfo(sel) {
+    if (!selection) {
+      infoEl.innerHTML = '<span class="muted">Toque numa peça para ver as outras cores dela. Toque no centro de uma face para ver as peças que ela gira.</span>';
+      return;
+    }
+    const t = selection.s;
+    if (selection.type === 'piece') {
+      const others = [...sel].filter(x => x !== t).map(x => x.c);
+      const kind = others.length === 2 ? 'Canto' : 'Meio (aresta)';
+      infoEl.innerHTML = `<b>${kind}</b> ${swatch(t.c)} <span class="muted">outras cores:</span> ${others.map(swatch).join(' ')}
+        <span class="grow"></span><button data-act="clear">Fechar</button>`;
+    } else {
+      const f = faceOfNormal(t.n);
+      infoEl.innerHTML = `<b>Centro</b> ${swatch(t.c)} <span class="muted">face ${NAMES[f]} · gira estas 9 peças</span>
+        <span class="grow"></span>
+        <button data-act="move" data-m="${f}">↻ ${f}</button>
+        <button data-act="move" data-m="${f}'">↺ ${f}'</button>
+        <button data-act="clear">Fechar</button>`;
+    }
+  }
+  infoEl.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.act === 'clear') { selection = null; render(); }
+    else enqueue(b.dataset.m);
+  });
+
   function render() {
     const faces = { U: [], D: [], F: [], B: [], R: [], L: [] };
+    const sel = selectedSet();
+    stickerAt.clear();
     for (const s of stickers) {
-      const slot = slots.get(key(s.p, s.n));
+      const k = key(s.p, s.n);
+      stickerAt.set(k, s);
+      const slot = slots.get(k);
       slot.inner.style.background = COLORS[s.c];
+      slot.el.classList.toggle('hl', !!sel && sel.has(s));
+      slot.el.classList.toggle('dim', !!sel && !sel.has(s));
       const f = faceOfNormal(s.n);
       const [r, c] = netRC(f, s.p);
-      netCells[f][r * 3 + c].style.background = COLORS[s.c];
+      const cell = netCells[f][r * 3 + c];
+      cell.style.background = COLORS[s.c];
+      cell.dataset.key = k;
+      cell.classList.toggle('hl', !!sel && sel.has(s));
+      cell.classList.toggle('dim', !!sel && !sel.has(s));
       faces[f].push(s.c);
     }
+    renderInfo(sel);
     const solved = Object.values(faces).every(arr => arr.every(c => c === arr[0]));
     solvedEl.textContent = solved && history.length ? '✔ Resolvido!' : '';
     historyEl.textContent = history.length ? history.slice(-30).join(' ') : scrambleText;
@@ -377,7 +463,16 @@
     setView();
   });
   const endDrag = () => { drag = null; };
-  sceneEl.addEventListener('pointerup', endDrag);
+  sceneEl.addEventListener('pointerup', e => {
+    // Toque sem arrastar = selecionar a peça
+    if (drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const st = el && el.closest('.st');
+      if (st) pick(st.dataset.key);
+      else if (selection) { selection = null; render(); }
+    }
+    endDrag();
+  });
   sceneEl.addEventListener('pointercancel', endDrag);
 
   // ---------- Controles ----------
@@ -411,7 +506,7 @@
   document.getElementById('scramble').addEventListener('click', scramble);
   document.getElementById('reset').addEventListener('click', () => {
     if (busy) return;
-    resetState(); history = []; scrambleText = ''; render();
+    resetState(); history = []; scrambleText = ''; selection = null; render();
   });
   document.getElementById('undo').addEventListener('click', () => {
     if (busy || !history.length) return;
