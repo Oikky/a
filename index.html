@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Cubo Mágico</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: #000; color: #eee; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 12px 16px 24px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 4px 0 10px; letter-spacing: .5px; color: #ccc; }
+
+  .views { width: 100%; max-width: 1100px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .views { grid-template-columns: 1fr; gap: 10px; } }
+  .panel { background: #0b0b0b; border: 1px solid #1c1c1c; border-radius: 14px; padding: 10px; display: flex; flex-direction: column; align-items: center; }
+  .panel h2 { margin: 0 0 6px; font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* Visualização 3D */
+  #scene { width: 100%; aspect-ratio: 1 / 1; max-height: 440px; perspective: 1100px; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: grab; user-select: none; }
+  #scene:active { cursor: grabbing; }
+  #cube { position: relative; width: 0; height: 0; transform-style: preserve-3d; }
+  .st { position: absolute; background: #050505; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .st > i { position: absolute; inset: 5%; border-radius: 12%; display: block; }
+  .hint { font-size: 12px; color: #555; margin-top: 4px; }
+  @media (max-width: 760px) { #scene { aspect-ratio: 1 / .8; } .hint { display: none; } }
+
+  /* Visualização em cruz */
+  #net { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; margin: auto 0; }
+  .face { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; background: #050505; border-radius: 6px; position: relative; }
+  .face > i { border-radius: 14%; display: block; }
+
+  /* Controles */
+  .controls { width: 100%; max-width: 1100px; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .moves { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+  @media (max-width: 760px) { .moves { grid-template-columns: repeat(6, 1fr); } }
+  button { background: #161616; color: #eee; border: 1px solid #2a2a2a; border-radius: 10px; font-size: 15px; font-weight: 600; padding: 12px 0; cursor: pointer; font-family: inherit; touch-action: manipulation; }
+  button:hover { background: #1f1f1f; }
+  button:active { background: #2c2c2c; transform: scale(.97); }
+  .actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .actions button { font-size: 14px; }
+  .actions .primary { background: #1d3b8a; border-color: #2c50b0; }
+  .status { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #888; min-height: 20px; gap: 12px; }
+  #history { font-family: ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; white-space: nowrap; flex: 1; text-align: right; color: #666; }
+  #solved { color: #3ddc84; font-weight: 600; white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1>Cubo Mágico</h1>
+
+<div class="views">
+  <div class="panel">
+    <h2>3D</h2>
+    <div id="scene"><div id="cube"></div></div>
+    <div class="hint">Arraste para girar a visão</div>
+  </div>
+  <div class="panel">
+    <h2>Aberto (cruz)</h2>
+    <div id="net"></div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="moves" id="moves"></div>
+  <div class="actions">
+    <button id="scramble" class="primary">Embaralhar</button>
+    <button id="undo">Desfazer</button>
+    <button id="reset">Resetar</button>
+    <button id="resetView">Centralizar</button>
+  </div>
+  <div class="status"><span id="solved"></span><span id="history"></span></div>
+</div>
+
+<script>
+(() => {
+  // Cores padrão: U branco, D amarelo, F verde, B azul, R vermelho, L laranja
+  const COLORS = { U: '#ffffff', D: '#ffd500', F: '#009b48', B: '#0046ad', R: '#b71234', L: '#ff5800' };
+  // Normal (em coordenadas do mundo: x direita, y cima, z frente) de cada face
+  const FACE_NORMALS = { U: [0,1,0], D: [0,-1,0], F: [0,0,1], B: [0,0,-1], R: [1,0,0], L: [-1,0,0] };
+
+  // Movimentos: eixo, camada (null = cubo inteiro), ângulo (graus, regra da mão direita)
+  const MOVES = {
+    R: ['x', 1, -90], L: ['x', -1, 90], M: ['x', 0, 90],
+    U: ['y', 1, -90], D: ['y', -1, 90], E: ['y', 0, 90],
+    F: ['z', 1, -90], B: ['z', -1, 90], S: ['z', 0, -90],
+    x: ['x', null, -90], y: ['y', null, -90], z: ['z', null, -90],
+  };
+  const AXIS = { x: 0, y: 1, z: 2 };
+
+  // ---------- Estado ----------
+  let stickers = [];
+  function resetState() {
+    stickers = [];
+    for (const [face, n] of Object.entries(FACE_NORMALS)) {
+      const a = n.findIndex(v => v !== 0);
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        const p = [0, 0, 0];
+        p[a] = n[a];
+        const others = [0, 1, 2].filter(k => k !== a);
+        p[others[0]] = i; p[others[1]] = j;
+        stickers.push({ p, n: n.slice(), c: face });
+      }
+    }
+  }
+
+  function rotVec(v, axis, deg) {
+    const q = ((deg / 90) % 4 + 4) % 4; // quartos de volta positivos
+    let [x, y, z] = v;
+    for (let k = 0; k < q; k++) {
+      if (axis === 'x') [y, z] = [-z, y];
+      else if (axis === 'y') [x, z] = [z, -x];
+      else [x, y] = [-y, x];
+    }
+    return [x, y, z];
+  }
+
+  function parseMove(m) {
+    const base = MOVES[m[0]];
+    let mult = 1;
+    if (m.endsWith("2")) mult = 2; else if (m.endsWith("'")) mult = -1;
+    return { axis: base[0], layer: base[1], angle: base[2] * mult };
+  }
+  const inLayer = (p, axis, layer) => layer === null || p[AXIS[axis]] === layer;
+
+  function applyMove(m) {
+    const { axis, layer, angle } = parseMove(m);
+    for (const s of stickers) {
+      if (!inLayer(s.p, axis, layer)) continue;
+      s.p = rotVec(s.p, axis, angle);
+      s.n = rotVec(s.n, axis, angle);
+    }
+  }
+
+  function inverse(m) {
+    if (m.endsWith("2")) return m;
+    return m.endsWith("'") ? m[0] : m + "'";
+  }
+
+  // ---------- Visualização 3D ----------
+  const cubeEl = document.getElementById('cube');
+  const sceneEl = document.getElementById('scene');
+  const slots = new Map(); // "p|n" -> { el, inner, p, n, base }
+  const key = (p, n) => p.join(',') + '|' + n.join(',');
+  let size = 60;
+
+  function faceRotation(n) {
+    if (n[0] === 1) return 'rotateY(90deg)';
+    if (n[0] === -1) return 'rotateY(-90deg)';
+    if (n[1] === 1) return 'rotateX(90deg)';
+    if (n[1] === -1) return 'rotateX(-90deg)';
+    if (n[2] === -1) return 'rotateY(180deg)';
+    return 'rotateY(0deg)';
+  }
+
+  function buildSlots() {
+    resetState();
+    for (const s of stickers) {
+      const el = document.createElement('div');
+      el.className = 'st';
+      const inner = document.createElement('i');
+      el.appendChild(inner);
+      cubeEl.appendChild(el);
+      slots.set(key(s.p, s.n), { el, inner, p: s.p.slice(), n: s.n.slice(), base: '' });
+    }
+  }
+
+  function layoutSlots() {
+    const w = sceneEl.clientWidth;
+    size = Math.max(28, Math.min(80, Math.floor(w / 6.2)));
+    for (const slot of slots.values()) {
+      const { p, n, el } = slot;
+      const X = (p[0] + n[0] / 2) * size;
+      const Y = -(p[1] + n[1] / 2) * size; // CSS: y para baixo
+      const Z = (p[2] + n[2] / 2) * size;
+      el.style.width = el.style.height = size + 'px';
+      el.style.left = el.style.top = (-size / 2) + 'px';
+      slot.base = `translate3d(${X}px, ${Y}px, ${Z}px) ${faceRotation(n)}`;
+      el.style.transform = `rotate3d(1,0,0,0deg) ${slot.base}`;
+    }
+  }
+
+  // Converte ângulo do mundo (y para cima) para rotate3d do CSS (y para baixo)
+  function cssRotate(axis, deg) {
+    if (axis === 'x') return `rotate3d(1,0,0,${-deg}deg)`;
+    if (axis === 'y') return `rotate3d(0,1,0,${deg}deg)`;
+    return `rotate3d(0,0,1,${-deg}deg)`;
+  }
+
+  // ---------- Visualização em cruz ----------
+  const netEl = document.getElementById('net');
+  const NET_POS = { U: [0, 1], L: [1, 0], F: [1, 1], R: [1, 2], B: [1, 3], D: [2, 1] };
+  const NAMES = { U: 'Cima', D: 'Baixo', F: 'Frente', B: 'Trás', R: 'Direita', L: 'Esquerda' };
+  const netCells = {};
+  // Posição (linha, coluna) de um adesivo dentro da face, na planificação padrão
+  function netRC(face, p) {
+    const [x, y, z] = p;
+    switch (face) {
+      case 'U': return [z + 1, x + 1];
+      case 'D': return [1 - z, x + 1];
+      case 'F': return [1 - y, x + 1];
+      case 'B': return [1 - y, 1 - x];
+      case 'R': return [1 - y, 1 - z];
+      case 'L': return [1 - y, z + 1];
+    }
+  }
+  function faceOfNormal(n) {
+    for (const [f, fn] of Object.entries(FACE_NORMALS)) if (fn[0] === n[0] && fn[1] === n[1] && fn[2] === n[2]) return f;
+  }
+  function buildNet() {
+    for (const [f, [r, c]] of Object.entries(NET_POS)) {
+      const face = document.createElement('div');
+      face.className = 'face';
+      face.title = NAMES[f];
+      face.style.gridRow = r + 1;
+      face.style.gridColumn = c + 1;
+      netCells[f] = [];
+      for (let i = 0; i < 9; i++) {
+        const cell = document.createElement('i');
+        face.appendChild(cell);
+        netCells[f].push(cell);
+      }
+      netEl.appendChild(face);
+    }
+  }
+
+  // ---------- Desenho ----------
+  const solvedEl = document.getElementById('solved');
+  const historyEl = document.getElementById('history');
+  let history = [];
+
+  function render() {
+    const faces = { U: [], D: [], F: [], B: [], R: [], L: [] };
+    for (const s of stickers) {
+      const slot = slots.get(key(s.p, s.n));
+      slot.inner.style.background = COLORS[s.c];
+      const f = faceOfNormal(s.n);
+      const [r, c] = netRC(f, s.p);
+      netCells[f][r * 3 + c].style.background = COLORS[s.c];
+      faces[f].push(s.c);
+    }
+    const solved = Object.values(faces).every(arr => arr.every(c => c === arr[0]));
+    solvedEl.textContent = solved && history.length ? '✔ Resolvido!' : '';
+    historyEl.textContent = history.slice(-30).join(' ');
+  }
+
+  // ---------- Fila de animação ----------
+  const queue = [];
+  let busy = false;
+  const DURATION = 180;
+
+  function enqueue(m, record = true) {
+    queue.push({ m, record });
+    if (!busy) next();
+  }
+
+  function next() {
+    const item = queue.shift();
+    if (!item) { busy = false; return; }
+    busy = true;
+    const { m, record } = item;
+    const { axis, layer, angle } = parseMove(m);
+    const dur = queue.length > 3 ? 60 : (Math.abs(angle) === 180 ? DURATION * 1.4 : DURATION);
+    const moving = [...slots.values()].filter(s => inLayer(s.p, axis, layer));
+    for (const s of moving) {
+      s.el.style.transition = 'none';
+      s.el.style.transform = `${cssRotate(axis, 0)} ${s.base}`;
+    }
+    void cubeEl.offsetWidth; // força reflow
+    for (const s of moving) {
+      s.el.style.transition = `transform ${dur}ms ease-out`;
+      s.el.style.transform = `${cssRotate(axis, angle)} ${s.base}`;
+    }
+    setTimeout(() => {
+      applyMove(m);
+      if (record) history.push(m);
+      for (const s of moving) {
+        s.el.style.transition = 'none';
+        s.el.style.transform = `rotate3d(1,0,0,0deg) ${s.base}`;
+      }
+      render();
+      next();
+    }, dur);
+  }
+
+  // ---------- Rotação da visão ----------
+  let rx = -28, ry = -38;
+  function setView() { cubeEl.style.transform = `rotateX(${rx}deg) rotateY(${ry}deg)`; }
+  let drag = null;
+  sceneEl.addEventListener('pointerdown', e => {
+    drag = { x: e.clientX, y: e.clientY, rx, ry };
+    sceneEl.setPointerCapture(e.pointerId);
+  });
+  sceneEl.addEventListener('pointermove', e => {
+    if (!drag) return;
+    ry = drag.ry + (e.clientX - drag.x) * 0.5;
+    rx = Math.max(-89, Math.min(89, drag.rx - (e.clientY - drag.y) * 0.5));
+    setView();
+  });
+  const endDrag = () => { drag = null; };
+  sceneEl.addEventListener('pointerup', endDrag);
+  sceneEl.addEventListener('pointercancel', endDrag);
+
+  // ---------- Controles ----------
+  const movesEl = document.getElementById('moves');
+  const BUTTONS = ['R', "R'", 'R2', 'L', "L'", 'L2', 'U', "U'", 'U2',
+                   'D', "D'", 'D2', 'F', "F'", 'F2', 'B', "B'", 'B2',
+                   'M', "M'", 'E', "E'", 'S', "S'", 'x', 'y', 'z'];
+  for (const m of BUTTONS) {
+    const b = document.createElement('button');
+    b.textContent = m;
+    b.addEventListener('click', () => enqueue(m));
+    movesEl.appendChild(b);
+  }
+
+  function scramble() {
+    if (busy) return;
+    const faces = 'RLUDFB';
+    const opp = { R: 'L', L: 'R', U: 'D', D: 'U', F: 'B', B: 'F' };
+    let last = '', seq = [];
+    while (seq.length < 20) {
+      const f = faces[Math.floor(Math.random() * 6)];
+      if (f === last || (opp[f] === last && Math.random() < .5)) continue;
+      last = f;
+      seq.push(f + ['', "'", '2'][Math.floor(Math.random() * 3)]);
+    }
+    seq.forEach(applyMove);
+    history = [];
+    historyEl.textContent = '';
+    render();
+    historyEl.textContent = 'Embaralhado: ' + seq.join(' ');
+  }
+
+  document.getElementById('scramble').addEventListener('click', scramble);
+  document.getElementById('reset').addEventListener('click', () => {
+    if (busy) return;
+    resetState(); history = []; render();
+  });
+  document.getElementById('undo').addEventListener('click', () => {
+    if (busy || !history.length) return;
+    const m = history.pop();
+    enqueue(inverse(m), false);
+  });
+  document.getElementById('resetView').addEventListener('click', () => { rx = -28; ry = -38; setView(); });
+
+  // Teclado (PC): letra = horário, Shift + letra = anti-horário
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toUpperCase();
+    if ('RLUDFBMES'.includes(k) && k.length === 1) enqueue(k + (e.shiftKey ? "'" : ''));
+    else if ('XYZ'.includes(k) && k.length === 1) enqueue(k.toLowerCase() + (e.shiftKey ? "'" : ''));
+  });
+
+  // ---------- Início ----------
+  buildSlots();
+  buildNet();
+  layoutSlots();
+  setView();
+  render();
+  window.addEventListener('resize', layoutSlots);
+})();
+</script>
+</body>
+</html>
