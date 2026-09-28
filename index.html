@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Cubo Mágico">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Cubo Mágico</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -59,6 +66,21 @@
   button.tinted:hover { background: var(--bg); filter: brightness(1.12); }
   button.tinted:active { background: var(--bg); filter: brightness(.85); }
 
+  /* Histórico de resoluções */
+  .log { width: 100%; max-width: 1100px; margin-top: 16px; background: #0b0b0b; border: 1px solid #1c1c1c; border-radius: 14px; padding: 12px; }
+  .log-head { display: flex; align-items: center; gap: 12px; }
+  .log-head h2 { margin: 0; font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+  .log-head .grow { flex: 1; }
+  .log-head button { padding: 6px 12px; font-size: 12px; font-weight: 500; }
+  #best { font-size: 13px; color: #ffd500; }
+  #log { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+  #log li { display: grid; grid-template-columns: 1fr auto auto; gap: 14px; font-size: 13px; color: #aaa; padding: 6px 8px; background: #111; border-radius: 8px; font-variant-numeric: tabular-nums; }
+  #log li b { color: #fff; font-weight: 600; }
+  #log li.top b { color: #ffd500; }
+  #log .empty { display: block; color: #555; background: none; }
+  header { width: 100%; max-width: 1100px; display: flex; align-items: center; justify-content: center; position: relative; }
+  #install { position: absolute; right: 0; top: 0; padding: 6px 12px; font-size: 13px; background: #1d3b8a; border-color: #2c50b0; }
+
   .speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #888; }
   .speed button { flex: 1; padding: 8px 0; font-size: 13px; font-weight: 500; }
   .speed button.on { background: #2a2a2a; border-color: #555; color: #fff; }
@@ -79,7 +101,7 @@
 </style>
 </head>
 <body>
-<h1>Cubo Mágico</h1>
+<header><h1>Cubo Mágico</h1><button id="install" hidden>Instalar app</button></header>
 
 <div class="views">
   <div class="panel">
@@ -110,6 +132,11 @@
     <button data-ms="160">Rápida</button>
   </div>
   <div class="status"><span id="solved"></span><span id="history"></span></div>
+</div>
+
+<div class="log">
+  <div class="log-head"><h2>Histórico</h2><span id="best"></span><span class="grow"></span><button id="clearLog">Limpar</button></div>
+  <ol id="log"></ol>
 </div>
 
 <script>
@@ -275,6 +302,9 @@
   const historyEl = document.getElementById('history');
   let history = [];
   let scrambleText = '';
+  let game = { scrambled: false, start: null };
+  let solves = [];
+  let lastSolve = '';
 
   // ---------- Seleção ----------
   // selection = { type: 'piece' | 'center', s: adesivo tocado } — acompanha a peça quando ela se move
@@ -366,8 +396,10 @@
     renderInfo(sel);
     tintButtons();
     const solved = Object.values(faces).every(arr => arr.every(c => c === arr[0]));
-    solvedEl.textContent = solved && history.length ? '✔ Resolvido!' : '';
+    checkSolved(solved);
+    updateTimer();
     historyEl.textContent = history.length ? history.slice(-30).join(' ') : scrambleText;
+    save();
   }
 
   // ---------- Fila de animação ----------
@@ -458,7 +490,11 @@
     setTimeout(() => {
       applyMove(m);
       cleanupNet();
-      if (record) history.push(m);
+      if (record) {
+        history.push(m);
+        lastSolve = '';
+        if (game.scrambled && !game.start) game.start = Date.now();
+      }
       for (const s of moving) {
         s.el.style.transition = 'none';
         s.el.style.transform = `rotate3d(1,0,0,0deg) ${s.base}`;
@@ -492,6 +528,7 @@
       else if (selection) { selection = null; render(); }
     }
     endDrag();
+    save();
   });
   sceneEl.addEventListener('pointercancel', endDrag);
 
@@ -520,6 +557,8 @@
       seq.push(f + ['', "'", '2'][Math.floor(Math.random() * 3)]);
     }
     history = [];
+    lastSolve = '';
+    game = { scrambled: true, start: null };
     scrambleText = 'Embaralhado: ' + seq.join(' ');
     for (const m of seq) enqueue(m, false, true);
   }
@@ -527,11 +566,14 @@
   document.getElementById('scramble').addEventListener('click', scramble);
   document.getElementById('reset').addEventListener('click', () => {
     if (busy) return;
-    resetState(); history = []; scrambleText = ''; selection = null; render();
+    resetState(); history = []; scrambleText = ''; selection = null;
+    game = { scrambled: false, start: null }; lastSolve = '';
+    render();
   });
   document.getElementById('undo').addEventListener('click', () => {
     if (busy || !history.length) return;
     const m = history.pop();
+    lastSolve = '';
     enqueue(inverse(m), false);
   });
   document.getElementById('resetView').addEventListener('click', () => { rx = -28; ry = -38; setView(); });
@@ -542,6 +584,7 @@
     if (!b) return;
     DURATION = +b.dataset.ms;
     speedEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    save();
   });
 
   // Teclado (PC): letra = horário, Shift + letra = anti-horário
@@ -552,12 +595,111 @@
     else if ('XYZ'.includes(k) && k.length === 1) enqueue(k.toLowerCase() + (e.shiftKey ? "'" : ''));
   });
 
+  // ---------- Memória (salva no aparelho) ----------
+  const STORE = 'cubo-magico-v1';
+  function load() {
+    try {
+      const d = JSON.parse(localStorage.getItem(STORE) || 'null');
+      if (!d) return;
+      if (Array.isArray(d.stickers) && d.stickers.length === 54) stickers = d.stickers;
+      history = d.history || [];
+      scrambleText = d.scrambleText || '';
+      game = d.game || game;
+      solves = d.solves || [];
+      if (d.speed) {
+        DURATION = d.speed;
+        speedEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', +x.dataset.ms === d.speed));
+      }
+      if (typeof d.rx === 'number') { rx = d.rx; ry = d.ry; }
+    } catch (e) {}
+  }
+  function save() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ stickers, history, scrambleText, game, solves, speed: DURATION, rx, ry }));
+    } catch (e) {}
+  }
+
+  // ---------- Cronômetro e histórico de resoluções ----------
+  // game.scrambled: cubo embaralhado e ainda não resolvido; game.start: hora do 1º movimento
+  const fmt = ms => {
+    const t = Math.floor(ms / 1000);
+    return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  };
+  function updateTimer() {
+    if (lastSolve) { solvedEl.textContent = lastSolve; return; }
+    if (game.scrambled) {
+      solvedEl.textContent = game.start
+        ? `⏱ ${fmt(Date.now() - game.start)} · ${history.length} mov.`
+        : '⏱ O tempo começa no 1º movimento';
+    } else solvedEl.textContent = '';
+  }
+  setInterval(updateTimer, 1000);
+
+  function checkSolved(solved) {
+    if (solved && game.scrambled && history.length) {
+      const time = Date.now() - (game.start || Date.now());
+      solves.unshift({ date: Date.now(), time, moves: history.length, scramble: scrambleText.replace('Embaralhado: ', '') });
+      solves = solves.slice(0, 100);
+      game = { scrambled: false, start: null };
+      lastSolve = `✔ Resolvido em ${fmt(time)} com ${history.length} movimentos!`;
+      renderLog();
+    }
+  }
+
+  const logEl = document.getElementById('log');
+  const bestEl = document.getElementById('best');
+  function renderLog() {
+    if (!solves.length) {
+      logEl.innerHTML = '<li class="empty">Nenhuma resolução ainda. Toque em Embaralhar e monte o cubo para registrar seu tempo.</li>';
+      bestEl.textContent = '';
+      return;
+    }
+    const best = solves.reduce((a, b) => (b.time < a.time ? b : a));
+    bestEl.textContent = `★ Melhor: ${fmt(best.time)}`;
+    logEl.innerHTML = solves.map(x => {
+      const d = new Date(x.date);
+      const when = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' +
+                   d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      return `<li class="${x === best ? 'top' : ''}" title="Embaralhamento: ${x.scramble}"><span>${when}</span><b>${fmt(x.time)}</b><span>${x.moves} mov.</span></li>`;
+    }).join('');
+  }
+
+  const clearBtn = document.getElementById('clearLog');
+  let clearTimer;
+  clearBtn.addEventListener('click', () => {
+    if (clearBtn.dataset.armed) {
+      solves = []; save(); renderLog();
+      delete clearBtn.dataset.armed; clearBtn.textContent = 'Limpar';
+      return;
+    }
+    clearBtn.dataset.armed = '1'; clearBtn.textContent = 'Toque de novo para apagar';
+    clearTimeout(clearTimer);
+    clearTimer = setTimeout(() => { delete clearBtn.dataset.armed; clearBtn.textContent = 'Limpar'; }, 3000);
+  });
+
+  // ---------- Instalar como app ----------
+  const installBtn = document.getElementById('install');
+  let installEvt = null;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; installBtn.hidden = false; });
+  installBtn.addEventListener('click', async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    try { await installEvt.userChoice; } catch (e) {}
+    installEvt = null; installBtn.hidden = true;
+  });
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) {}
+  }
+
   // ---------- Início ----------
   buildSlots();
   buildNet();
+  load();
   layoutSlots();
   setView();
   render();
+  renderLog();
+  updateTimer();
   window.addEventListener('resize', layoutSlots);
 })();
 </script>
