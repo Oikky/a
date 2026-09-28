@@ -29,6 +29,20 @@
   #net { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; margin: auto 0; }
   .face { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; background: #050505; border-radius: 6px; position: relative; }
   .face > i { border-radius: 14%; display: block; }
+  #net { position: relative; }
+  .face > i.hole { background: #1a1a1a !important; }
+  .fly { position: absolute; border-radius: 14%; z-index: 2; pointer-events: none; box-shadow: 0 0 0 2px #fff, 0 4px 14px rgba(0,0,0,.7); }
+
+  /* Nome do movimento atual */
+  .panel { position: relative; }
+  .movelabel { position: absolute; top: 8px; right: 12px; text-align: right; pointer-events: none; opacity: 0; transition: opacity .2s; }
+  .movelabel.show { opacity: 1; }
+  .movelabel b { display: block; font-size: 30px; line-height: 1; color: #fff; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .movelabel span { font-size: 12px; color: #999; }
+
+  .speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #888; }
+  .speed button { flex: 1; padding: 8px 0; font-size: 13px; font-weight: 500; }
+  .speed button.on { background: #2a2a2a; border-color: #555; color: #fff; }
 
   /* Controles */
   .controls { width: 100%; max-width: 1100px; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
@@ -51,6 +65,7 @@
 <div class="views">
   <div class="panel">
     <h2>3D</h2>
+    <div class="movelabel" id="moveLabel"><b></b><span></span></div>
     <div id="scene"><div id="cube"></div></div>
     <div class="hint">Arraste para girar a visão</div>
   </div>
@@ -67,6 +82,11 @@
     <button id="undo">Desfazer</button>
     <button id="reset">Resetar</button>
     <button id="resetView">Centralizar</button>
+  </div>
+  <div class="speed" id="speed">Velocidade
+    <button data-ms="700">Lenta</button>
+    <button data-ms="380" class="on">Normal</button>
+    <button data-ms="160">Rápida</button>
   </div>
   <div class="status"><span id="solved"></span><span id="history"></span></div>
 </div>
@@ -227,6 +247,7 @@
   const solvedEl = document.getElementById('solved');
   const historyEl = document.getElementById('history');
   let history = [];
+  let scrambleText = '';
 
   function render() {
     const faces = { U: [], D: [], F: [], B: [], R: [], L: [] };
@@ -240,16 +261,70 @@
     }
     const solved = Object.values(faces).every(arr => arr.every(c => c === arr[0]));
     solvedEl.textContent = solved && history.length ? '✔ Resolvido!' : '';
-    historyEl.textContent = history.slice(-30).join(' ');
+    historyEl.textContent = history.length ? history.slice(-30).join(' ') : scrambleText;
   }
 
   // ---------- Fila de animação ----------
   const queue = [];
   let busy = false;
-  const DURATION = 180;
+  let DURATION = 380;
+  const moveLabel = document.getElementById('moveLabel');
+  const FACE_PT = { R: 'Direita', L: 'Esquerda', U: 'Cima', D: 'Baixo', F: 'Frente', B: 'Trás',
+                    M: 'Meio (como L)', E: 'Equador (como D)', S: 'Em pé (como F)',
+                    x: 'Cubo todo (como R)', y: 'Cubo todo (como U)', z: 'Cubo todo (como F)' };
+  function describe(m) {
+    const dir = m.endsWith('2') ? 'meia volta' : m.endsWith("'") ? 'anti-horário' : 'horário';
+    return `${FACE_PT[m[0]]} · ${dir}`;
+  }
+  let labelTimer;
+  function showLabel(m) {
+    moveLabel.querySelector('b').textContent = m;
+    moveLabel.querySelector('span').textContent = describe(m);
+    moveLabel.classList.add('show');
+    clearTimeout(labelTimer);
+    labelTimer = setTimeout(() => moveLabel.classList.remove('show'), 1500);
+  }
 
-  function enqueue(m, record = true) {
-    queue.push({ m, record });
+  // Planificação: os adesivos da camada deslizam da posição antiga para a nova
+  function netCellOf(p, n) {
+    const f = faceOfNormal(n);
+    const [r, c] = netRC(f, p);
+    return netCells[f][r * 3 + c];
+  }
+  function animateNet(axis, layer, angle, dur) {
+    const base = netEl.getBoundingClientRect();
+    const flies = [], holes = [];
+    for (const s of stickers) {
+      if (!inLayer(s.p, axis, layer)) continue;
+      const from = netCellOf(s.p, s.n);
+      const to = netCellOf(rotVec(s.p, axis, angle), rotVec(s.n, axis, angle));
+      const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
+      const t = document.createElement('div');
+      t.className = 'fly';
+      t.style.cssText = `left:${a.left - base.left}px;top:${a.top - base.top}px;width:${a.width}px;height:${a.height}px;background:${COLORS[s.c]}`;
+      const d = s.n[AXIS[axis]];
+      if (d !== 0) {
+        // Adesivo da face que gira: roda em volta do centro da face (horário visto de fora = positivo no CSS)
+        const fr = from.parentElement.getBoundingClientRect();
+        t.style.transformOrigin = `${fr.left + fr.width / 2 - a.left}px ${fr.top + fr.height / 2 - a.top}px`;
+        flies.push([t, `rotate(${-angle * d}deg)`]);
+      } else {
+        flies.push([t, `translate(${b.left - a.left}px, ${b.top - a.top}px)`]);
+      }
+      netEl.appendChild(t);
+      from.classList.add('hole');
+      holes.push(from);
+    }
+    void netEl.offsetWidth;
+    for (const [t, tf] of flies) {
+      t.style.transition = `transform ${dur}ms ease-in-out`;
+      t.style.transform = tf;
+    }
+    return () => { flies.forEach(([t]) => t.remove()); holes.forEach(h => h.classList.remove('hole')); };
+  }
+
+  function enqueue(m, record = true, fast = false) {
+    queue.push({ m, record, fast });
     if (!busy) next();
   }
 
@@ -257,9 +332,13 @@
     const item = queue.shift();
     if (!item) { busy = false; return; }
     busy = true;
-    const { m, record } = item;
+    const { m, record, fast } = item;
     const { axis, layer, angle } = parseMove(m);
-    const dur = queue.length > 3 ? 60 : (Math.abs(angle) === 180 ? DURATION * 1.4 : DURATION);
+    let dur = Math.abs(angle) === 180 ? DURATION * 1.4 : DURATION;
+    if (fast) dur = 110;
+    else if (queue.length > 3) dur = Math.min(dur, 120);
+    if (!fast) showLabel(m);
+    const cleanupNet = animateNet(axis, layer, angle, dur);
     const moving = [...slots.values()].filter(s => inLayer(s.p, axis, layer));
     for (const s of moving) {
       s.el.style.transition = 'none';
@@ -267,11 +346,12 @@
     }
     void cubeEl.offsetWidth; // força reflow
     for (const s of moving) {
-      s.el.style.transition = `transform ${dur}ms ease-out`;
+      s.el.style.transition = `transform ${dur}ms ease-in-out`;
       s.el.style.transform = `${cssRotate(axis, angle)} ${s.base}`;
     }
     setTimeout(() => {
       applyMove(m);
+      cleanupNet();
       if (record) history.push(m);
       for (const s of moving) {
         s.el.style.transition = 'none';
@@ -323,17 +403,15 @@
       last = f;
       seq.push(f + ['', "'", '2'][Math.floor(Math.random() * 3)]);
     }
-    seq.forEach(applyMove);
     history = [];
-    historyEl.textContent = '';
-    render();
-    historyEl.textContent = 'Embaralhado: ' + seq.join(' ');
+    scrambleText = 'Embaralhado: ' + seq.join(' ');
+    for (const m of seq) enqueue(m, false, true);
   }
 
   document.getElementById('scramble').addEventListener('click', scramble);
   document.getElementById('reset').addEventListener('click', () => {
     if (busy) return;
-    resetState(); history = []; render();
+    resetState(); history = []; scrambleText = ''; render();
   });
   document.getElementById('undo').addEventListener('click', () => {
     if (busy || !history.length) return;
@@ -341,6 +419,14 @@
     enqueue(inverse(m), false);
   });
   document.getElementById('resetView').addEventListener('click', () => { rx = -28; ry = -38; setView(); });
+
+  const speedEl = document.getElementById('speed');
+  speedEl.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    DURATION = +b.dataset.ms;
+    speedEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  });
 
   // Teclado (PC): letra = horário, Shift + letra = anti-horário
   document.addEventListener('keydown', e => {
